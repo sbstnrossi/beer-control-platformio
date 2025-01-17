@@ -50,8 +50,9 @@ UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
 const int ledPin = LED_BUILTIN;
 int ledStatus = 0;
-
-
+float refTemp, tempH, tempHH, tempL, tempLL;
+UBaseType_t selectedMode = MODE_OFF;
+UBaseType_t currentMode  = UNDEFINED;
 
 //static QueueHandle_t tempQueue = NULL;
 
@@ -148,12 +149,8 @@ void vCheckNewMessagesTask(void *px)
 /* check for temperature bounds - ¿log? */
 
 /* Temperature control */
-#if 0
 void tempControl(void* px)
 {
-  /* las variables tienen que estar compartidas entre tareas */
-  UBaseType_t selectedMode = MODE_OFF;
-  UBaseType_t currentMode  = UNDEFINED;
   while(1){
     if (!(MODE_OFF))
     {
@@ -163,14 +160,14 @@ void tempControl(void* px)
           switch (currentMode)
           {
             case UNDEFINED :
-              if (refTemp > T_HH) currentMode = COOLING;
-              else if (refTemp < T_LL) currentMode = HEATING;
+              if (refTemp > tempHH) currentMode = COOLING;
+              else if (refTemp < tempLL) currentMode = HEATING;
               break;
             case HEATING :
-              if (refTemp > T_HH) currentMode = COOLING;
+              if (refTemp > tempHH) currentMode = COOLING;
               break;
             case COOLING :
-              if (refTemp < T_LL) currentMode = HEATING;
+              if (refTemp < tempLL) currentMode = HEATING;
               break;
             default:
               currentMode = UNDEFINED;
@@ -188,12 +185,12 @@ void tempControl(void* px)
     } else {
       digitalWrite(COOL_PIN, LOW);
       digitalWrite(HEAT_PIN, LOW);
+      currentMode = UNDEFINED;
     }
   }
   /* Must not exit, but if you leave the while(1) you can delete the task */
   vTaskDelete(NULL);
 }
-#endif
 
 void setup()
 {
