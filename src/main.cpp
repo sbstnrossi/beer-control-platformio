@@ -26,13 +26,9 @@
 #include "sensorReadings.h"
 #include "tokens.h"
 
-// Wifi network station credentials
-#define WIFI_SSID "Sanmarti"
-#define WIFI_PASSWORD "palajolu"
-// Telegram BOT Token (Get from Botfather)
-
 #define HEAT_PIN (21)
 #define COOL_PIN (22)
+#define FAN_PIN  (23)
 
 #define MODE_OFF  (0)
 #define MODE_AUTO (1)
@@ -41,6 +37,8 @@
 #define UNDEFINED (0)
 #define HEATING   (1)
 #define COOLING   (2)
+#define COOL_WAIT (120000)
+#define FAN_WAIT  (300000)
 
 const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 
@@ -53,8 +51,6 @@ int ledStatus = 0;
 float refTemp, tempH, tempHH, tempL, tempLL;
 UBaseType_t selectedMode = MODE_OFF;
 UBaseType_t currentMode  = UNDEFINED;
-
-//static QueueHandle_t tempQueue = NULL;
 
 void handleNewMessages(int numNewMessages)
 {
@@ -151,9 +147,21 @@ void vCheckNewMessagesTask(void *px)
 /* Temperature control */
 void tempControl(void* px)
 {
+  bool coolingState = false;
+  bool heatingState = false;
+  bool blowingState = false;
+  bool canRestart   = false;
+  bool canStopFan   = false;
+  TickType_t xTimeOff = xTaskGetTickCount();
+  TickType_t xTimeCur;
   while(1){
+    xTimeCur = xTaskGetTickCount();
+    if (xTimeCur < xTimeOff) xTimeOff = xTimeCur;
+    canRestart = xTimeCur - xTimeOff > COOL_WAIT ? true : false;
+    canStopFan = xTimeCur - xTimeOff > FAN_WAIT  ? true : false;
     if (!(MODE_OFF))
     {
+      /* mode changes */
       switch (selectedMode)
       {
         case MODE_AUTO :
@@ -180,12 +188,82 @@ void tempControl(void* px)
           currentMode = HEATING;
           break;
         default:
+          currentMode  = UNDEFINED;
+          selectedMode = MODE_OFF;
+      }
+      /* temp control */
+      switch (currentMode)
+      {
+        case UNDEFINED :
+          if (digitalRead(COOL_PIN)) digitalWrite(COOL_PIN, LOW);
+          if (digitalRead(HEAT_PIN)) digitalWrite(HEAT_PIN, LOW);
+          coolingState = false;
+          heatingState = false;
+          if (blowingState && canStopFan)
+          {
+            digitalWrite(FAN_PIN,  LOW);
+            blowingState = false;
+          }
+          break;
+        case COOLING :
+          if (digitalRead(HEAT_PIN)) digitalWrite(HEAT_PIN, LOW);
+          if (coolingState && (refTemp < tempL)) 
+          {
+            xTimeOff = xTaskGetTickCount();
+            digitalWrite(COOL_PIN, LOW);
+            coolingState = false;
+          } 
+          else if (!(coolingState))
+          {
+            if (canRestart && (refTemp > tempH))
+            {
+              digitalWrite(COOL_PIN, HIGH);
+              digitalWrite(FAN_PIN,  HIGH);
+              coolingState = true;
+              blowingState = true;
+            }
+            else if (blowingState && canStopFan)
+            {
+              digitalWrite(FAN_PIN,  LOW);
+              blowingState = false;
+            }
+          }
+          break;
+        case HEATING :
+          if (digitalRead(COOL_PIN)) digitalWrite(COOL_PIN, LOW);
+          if (heatingState && (refTemp > tempH)) 
+          {
+            xTimeOff = xTaskGetTickCount();
+            digitalWrite(HEAT_PIN, LOW);
+            heatingState = false;
+          } 
+          else if (!(heatingState))
+          {
+            if (refTemp < tempL)
+            {
+              digitalWrite(HEAT_PIN, HIGH);
+              digitalWrite(FAN_PIN,  HIGH);
+              heatingState = true;
+              blowingState = true;
+            }
+            else if (blowingState && canStopFan)
+            {
+              digitalWrite(FAN_PIN,  LOW);
+              blowingState = false;
+            }
+          }
+          break;
+        default:
           currentMode = UNDEFINED;
       }
     } else {
+      currentMode = UNDEFINED;
       digitalWrite(COOL_PIN, LOW);
       digitalWrite(HEAT_PIN, LOW);
-      currentMode = UNDEFINED;
+      digitalWrite(FAN_PIN,  LOW);
+      coolingState = false;
+      heatingState = false;
+      blowingState = false;
     }
   }
   /* Must not exit, but if you leave the while(1) you can delete the task */
