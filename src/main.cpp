@@ -260,10 +260,14 @@ void vTempControl(void* px)
           }
           break;
         case COOLING :
-          heatingState = false;
-          if (coolingState && (refTemp < tempL)) 
+          if (heatingState)
           {
             xTimeOff = xTaskGetTickCount();
+            heatingState = false;
+          }
+          if (coolingState && (refTemp < tempL)) 
+          {
+            
             coolingState = false;
           } 
           else if (!(coolingState))
@@ -280,7 +284,11 @@ void vTempControl(void* px)
           }
           break;
         case HEATING :
-          coolingState = false;
+          if (coolingState)
+          {
+            xTimeOff = xTaskGetTickCount();
+            coolingState = false;
+          }
           if (heatingState && (refTemp > tempH)) 
           {
             xTimeOff = xTaskGetTickCount();
