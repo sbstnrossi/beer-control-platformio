@@ -49,12 +49,18 @@ UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
 const int ledPin = LED_BUILTIN;
 int ledStatus = 0;
-float refTemp, tempH, tempHH, tempL, tempLL;
-UBaseType_t selectedMode = MODE_OFF;
+float refTemp, tempH = 22.0, tempHH = 23.0, tempL = 18.0, tempLL = 17.0;
+UBaseType_t selectedMode = MODE_AUTO;
 UBaseType_t currentMode  = UNDEFINED;
 uint8_t chamberAdd[] = DS18B20_CHAMBER;
 /* TODO update liquid termometer address */
 uint8_t liquidAdd[]  = DS18B20_CHAMBER;
+
+bool coolingState = false;
+bool heatingState = false;
+bool blowingState = false;
+bool canRestart   = false;
+bool canStopFan   = false;
 
 void handleNewMessages(int numNewMessages)
 {
@@ -70,36 +76,66 @@ void handleNewMessages(int numNewMessages)
     if (from_name == "")
       from_name = "Guest";
 
-    if (text == "/ledon")
-    {
-      digitalWrite(ledPin, LOW); // turn the LED on (HIGH is the voltage level)
-      ledStatus = 1;
-      bot.sendMessage(chat_id, "Led is ON", "");
-    }
-
-    if (text == "/ledoff")
-    {
-      ledStatus = 0;
-      digitalWrite(ledPin, HIGH); // turn the LED off (LOW is the voltage level)
-      bot.sendMessage(chat_id, "Led is OFF", "");
-    }
-
     if (text == "/status")
     {
-      if (ledStatus)
+      String statusString;
+      String sMode;
+      String sOperating;
+      String sFan;
+      String sCooler;
+      String sHeater;
+      switch (selectedMode)
       {
-        bot.sendMessage(chat_id, "Led is ON", "");
+        case MODE_OFF :
+          sMode = "Apagado";
+          break;
+        case MODE_AUTO :
+          sMode = "Automatico";
+          break;
+        case MODE_COOL :
+          sMode = "Enfriamiento";
+          break;
+        case MODE_HEAT :
+          sMode = "Calentamiento";
+          break;
+        default:
+          sMode = "No reconocido";
       }
-      else
+      switch (currentMode)
       {
-        bot.sendMessage(chat_id, "Led is OFF", "");
+        case UNDEFINED :
+          sOperating = "Sin definir";
+          break;
+        case HEATING :
+          sOperating = "Calentamiento";
+          break;
+        case COOLING :
+          sOperating = "Enfriamiento";
+          break;
+        default:
+          sOperating = "No reconocido";
       }
+      sFan    = blowingState ? "Encendido" : "Apagado";
+      sCooler = coolingState ? "Encendido" : "Apagado";
+      sHeater = heatingState ? "Encendido" : "Apagado";
+      statusString = "Modo de operación seleccionado: " + sMode + "\n" +
+                     "Modo de operación en funcionamiento: " + sOperating + "\n" +
+                     "Ventilador: " + sFan + "\n" +
+                     "Enfriador: " + sCooler + "\n" +
+                     "Calentador: " + sHeater + "\n" +
+                     "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n" +
+                     "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n" +
+                     "Temperatura superior de histéresis: " + String(tempH) + "°C\n" +
+                     "Temperatura inferior de histéresis: " + String(tempL) + "°C\n" +
+                     "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n" +
+                     "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
+      bot.sendMessage(chat_id, statusString, "Markdown");
     }
 
     if (text == "/getTemp")
     {
-      /* TODO loop all termometers */
-      String tempString = "Temperatura en DS18B20: " + readDSTempStringC(0) + "°C\n";
+      String tempString = "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n" +
+                          "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
@@ -111,19 +147,27 @@ void handleNewMessages(int numNewMessages)
 
     if (text == "/getLiquidTemp")
     {
-      /* TODO add semaphore */
       String tempString = "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
+    if (text == "/setModeOff")  selectedMode = MODE_OFF;
+    if (text == "/setModeAuto") selectedMode = MODE_AUTO;
+    if (text == "/setModeCool") selectedMode = MODE_COOL;
+    if (text == "/setModeHeat") selectedMode = MODE_HEAT;
+
     if (text == "/start")
     {
-      String welcome = "Welcome to Universal Arduino Telegram Bot library, " + from_name + ".\n";
-      welcome += "This is Flash Led Bot example.\n\n";
-      welcome += "/ledon : to switch the Led ON\n";
-      welcome += "/ledoff : to switch the Led OFF\n";
-      welcome += "/getTemp : Returns current DS18B20 temperature\n";
-      welcome += "/status : Returns current status of LED\n";
+      String welcome = "Hola, " + from_name + ".\n";
+      welcome += "Por acá se interactúa con el control de procesos de cerveza casera.\n\n";
+      welcome += "/setModeAuto : para que enfríe o caliente según haga falta\n";
+      welcome += "/setModeCool : modo solo enfriamiento\n";
+      welcome += "/setModeHeat : modo solo calentamiento\n";
+      welcome += "/setModeOff : modo apagado\n";
+      welcome += "/getTemp : lista todas las temperaturas leídas\n";
+      welcome += "/getChamberTemp : Temperatura en la cámara\n";
+      welcome += "/getLiquidTemp : Temperatura en el líquido\n";
+      welcome += "/status : Estado general del sistema.\n";
       bot.sendMessage(chat_id, welcome, "Markdown");
     }
   }
@@ -162,13 +206,8 @@ void vCheckNewMessagesTask(void *px)
 /* check for temperature bounds - ¿log? */
 
 /* Temperature control */
-void tempControl(void* px)
+void vTempControl(void* px)
 {
-  bool coolingState = false;
-  bool heatingState = false;
-  bool blowingState = false;
-  bool canRestart   = false;
-  bool canStopFan   = false;
   TickType_t xTimeOff = xTaskGetTickCount();
   TickType_t xTimeCur;
   while(1){
@@ -176,7 +215,8 @@ void tempControl(void* px)
     if (xTimeCur < xTimeOff) xTimeOff = xTimeCur;
     canRestart = xTimeCur - xTimeOff > COOL_WAIT ? true : false;
     canStopFan = xTimeCur - xTimeOff > FAN_WAIT  ? true : false;
-    if (!(MODE_OFF))
+    refTemp = readDSTempC(chamberAdd);
+    if (selectedMode != MODE_OFF)
     {
       /* mode changes */
       switch (selectedMode)
@@ -212,60 +252,49 @@ void tempControl(void* px)
       switch (currentMode)
       {
         case UNDEFINED :
-          if (digitalRead(COOL_PIN)) digitalWrite(COOL_PIN, LOW);
-          if (digitalRead(HEAT_PIN)) digitalWrite(HEAT_PIN, LOW);
           coolingState = false;
           heatingState = false;
           if (blowingState && canStopFan)
           {
-            digitalWrite(FAN_PIN,  LOW);
             blowingState = false;
           }
           break;
         case COOLING :
-          if (digitalRead(HEAT_PIN)) digitalWrite(HEAT_PIN, LOW);
+          heatingState = false;
           if (coolingState && (refTemp < tempL)) 
           {
             xTimeOff = xTaskGetTickCount();
-            digitalWrite(COOL_PIN, LOW);
             coolingState = false;
           } 
           else if (!(coolingState))
           {
             if (canRestart && (refTemp > tempH))
             {
-              digitalWrite(COOL_PIN, HIGH);
-              digitalWrite(FAN_PIN,  HIGH);
               coolingState = true;
               blowingState = true;
             }
             else if (blowingState && canStopFan)
             {
-              digitalWrite(FAN_PIN,  LOW);
               blowingState = false;
             }
           }
           break;
         case HEATING :
-          if (digitalRead(COOL_PIN)) digitalWrite(COOL_PIN, LOW);
+          coolingState = false;
           if (heatingState && (refTemp > tempH)) 
           {
             xTimeOff = xTaskGetTickCount();
-            digitalWrite(HEAT_PIN, LOW);
             heatingState = false;
           } 
           else if (!(heatingState))
           {
             if (refTemp < tempL)
             {
-              digitalWrite(HEAT_PIN, HIGH);
-              digitalWrite(FAN_PIN,  HIGH);
               heatingState = true;
               blowingState = true;
             }
             else if (blowingState && canStopFan)
             {
-              digitalWrite(FAN_PIN,  LOW);
               blowingState = false;
             }
           }
@@ -273,8 +302,15 @@ void tempControl(void* px)
         default:
           currentMode = UNDEFINED;
       }
+      blowingState ? digitalWrite(FAN_PIN, HIGH)  : digitalWrite(FAN_PIN,  LOW);
+      coolingState ? digitalWrite(COOL_PIN, HIGH) : digitalWrite(COOL_PIN, LOW);
+      heatingState ? digitalWrite(HEAT_PIN, HIGH) : digitalWrite(HEAT_PIN, LOW);
     } else {
       currentMode = UNDEFINED;
+      if (digitalRead(COOL_PIN))
+      {
+        xTimeOff = xTaskGetTickCount();
+      }
       digitalWrite(COOL_PIN, LOW);
       digitalWrite(HEAT_PIN, LOW);
       digitalWrite(FAN_PIN,  LOW);
@@ -282,6 +318,7 @@ void tempControl(void* px)
       heatingState = false;
       blowingState = false;
     }
+    vTaskDelay(500);
   }
   /* Must not exit, but if you leave the while(1) you can delete the task */
   vTaskDelete(NULL);
@@ -354,6 +391,7 @@ void setup()
   Serial.println(now);
 
   xTaskCreate(vCheckNewMessagesTask, "checkMsg", 0x2000, NULL, 2, NULL);
+  xTaskCreate(vTempControl, "tempControl", 0x2000, NULL, 2, NULL);
 }
 
 void loop()
