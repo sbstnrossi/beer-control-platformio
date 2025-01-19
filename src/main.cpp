@@ -26,6 +26,8 @@
 #include "sensorReadings.h"
 #include "tokens.h"
 
+#define PRINT_ADDRESS_DS18B20
+
 #define HEAT_PIN (21)
 #define COOL_PIN (22)
 #define FAN_PIN  (23)
@@ -45,12 +47,14 @@ const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
-
 const int ledPin = LED_BUILTIN;
 int ledStatus = 0;
 float refTemp, tempH, tempHH, tempL, tempLL;
 UBaseType_t selectedMode = MODE_OFF;
 UBaseType_t currentMode  = UNDEFINED;
+uint8_t chamberAdd[] = DS18B20_CHAMBER;
+/* TODO update liquid termometer address */
+uint8_t liquidAdd[]  = DS18B20_CHAMBER;
 
 void handleNewMessages(int numNewMessages)
 {
@@ -94,8 +98,21 @@ void handleNewMessages(int numNewMessages)
 
     if (text == "/getTemp")
     {
-      /* TODO add semaphore */
+      /* TODO loop all termometers */
       String tempString = "Temperatura en DS18B20: " + readDSTempStringC(0) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+
+    if (text == "/getChamberTemp")
+    {
+      String tempString = "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+
+    if (text == "/getLiquidTemp")
+    {
+      /* TODO add semaphore */
+      String tempString = "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
@@ -284,6 +301,38 @@ void setup()
   digitalWrite(COOL_PIN, LOW);
 
   setupSensorsOnOneWire();
+
+  #ifdef PRINT_ADDRESS_DS18B20
+    DeviceAddress tempDeviceAddress;
+
+    int numberOfDevices = getSensorCount();
+    
+    // locate devices on the bus
+    Serial.print("Locating devices...");
+    Serial.print("Found ");
+    Serial.print(numberOfDevices, DEC);
+    Serial.println(" devices.");
+
+    // Loop through each device, print out address
+    for(int i=0;i<numberOfDevices; i++) {
+      // Search the wire for address
+      if(getAddress(tempDeviceAddress, i)) {
+        Serial.print("Found device ");
+        Serial.print(i, DEC);
+        Serial.print(" with address: ");
+      
+        for (int j=0;j<8;j++)
+        {
+          Serial.printf("%02X ", tempDeviceAddress[j]);
+        }
+        Serial.println();
+      } else {
+        Serial.print("Found ghost device at ");
+        Serial.print(i, DEC);
+        Serial.print(" but could not detect address. Check power and cabling");
+      }
+    }
+  #endif /* PRINT_ADDRESS_DS18B20 */
 
   // attempt to connect to Wifi network:
   Serial.print("Connecting to Wifi SSID ");
