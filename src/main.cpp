@@ -24,6 +24,7 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include "sensorReadings.h"
+#include "parameters.h"
 #include "tokens.h"
 
 #define PRINT_ADDRESS_DS18B20
@@ -47,9 +48,11 @@ const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
-const int ledPin = LED_BUILTIN;
-int ledStatus = 0;
-float refTemp, tempH = 22.0, tempHH = 23.0, tempL = 18.0, tempLL = 17.0;
+struct TaskParameters 
+{
+  TempParameters tempParams;
+};
+float refTemp;
 UBaseType_t selectedMode = MODE_AUTO;
 UBaseType_t currentMode  = UNDEFINED;
 uint8_t chamberAdd[] = DS18B20_CHAMBER;
@@ -62,8 +65,10 @@ bool blowingState = false;
 bool canRestart   = false;
 bool canStopFan   = false;
 
-void handleNewMessages(int numNewMessages)
+void handleNewMessages(int numNewMessages, void* params)
 {
+  TaskParameters pParams = *(struct TaskParameters*)params;
+  TempParameters tempParams = pParams.tempParams;
   Serial.print("handleNewMessages ");
   Serial.println(numNewMessages);
 
@@ -127,10 +132,10 @@ void handleNewMessages(int numNewMessages)
                       "Calentador: " + sHeater + "\n" +
                       "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n" +
                       "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n" +
-                      "Temperatura superior de histéresis: " + String(tempH) + "°C\n" +
-                      "Temperatura inferior de histéresis: " + String(tempL) + "°C\n" +
-                      "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n" +
-                      "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
+                      "Temperatura superior de histéresis: " + String(tempParams.getTempH()) + "°C\n" +
+                      "Temperatura inferior de histéresis: " + String(tempParams.getTempL()) + "°C\n" +
+                      "Temperatura superior de cambio de modo: " + String(tempParams.getTempHH()) + "°C\n" +
+                      "Temperatura inferior de cambio de modo: " + String(tempParams.getTempLL()) + "°C\n";
         xSemaphoreGive(xReadTempSemaphore);
       }
       else
@@ -210,7 +215,7 @@ void vCheckNewMessagesTask(void *px)
       while (numNewMessages)
       {
         Serial.println("got response");
-        handleNewMessages(numNewMessages);
+        handleNewMessages(numNewMessages, px);
         numNewMessages = bot.getUpdates(bot.last_message_received + 1);
       }
 
@@ -230,6 +235,8 @@ void vTempControl(void* px)
 {
   TickType_t xTimeOff = xTaskGetTickCount();
   TickType_t xTimeCur;
+  TaskParameters pParams = *(struct TaskParameters*)px;
+  TempParameters tempParams = pParams.tempParams;
   while(1){
     xTimeCur = xTaskGetTickCount();
     if (xTimeCur < xTimeOff) xTimeOff = xTimeCur;
@@ -249,14 +256,14 @@ void vTempControl(void* px)
           switch (currentMode)
           {
             case UNDEFINED :
-              if (refTemp > tempHH) currentMode = COOLING;
-              else if (refTemp < tempLL) currentMode = HEATING;
+              if (refTemp > tempParams.getTempHH()) currentMode = COOLING;
+              else if (refTemp < tempParams.getTempLL()) currentMode = HEATING;
               break;
             case HEATING :
-              if (refTemp > tempHH) currentMode = COOLING;
+              if (refTemp > tempParams.getTempHH()) currentMode = COOLING;
               break;
             case COOLING :
-              if (refTemp < tempLL) currentMode = HEATING;
+              if (refTemp < tempParams.getTempLL()) currentMode = HEATING;
               break;
             default:
               currentMode = UNDEFINED;
@@ -289,14 +296,14 @@ void vTempControl(void* px)
             xTimeOff = xTaskGetTickCount();
             heatingState = false;
           }
-          if (coolingState && (refTemp < tempL)) 
+          if (coolingState && (refTemp < tempParams.getTempL())) 
           {
             
             coolingState = false;
           } 
           else if (!(coolingState))
           {
-            if (canRestart && (refTemp > tempH))
+            if (canRestart && (refTemp > tempParams.getTempH()))
             {
               coolingState = true;
               blowingState = true;
@@ -313,14 +320,14 @@ void vTempControl(void* px)
             xTimeOff = xTaskGetTickCount();
             coolingState = false;
           }
-          if (heatingState && (refTemp > tempH)) 
+          if (heatingState && (refTemp > tempParams.getTempH()))
           {
             xTimeOff = xTaskGetTickCount();
             heatingState = false;
           } 
           else if (!(heatingState))
           {
-            if (refTemp < tempL)
+            if (refTemp < tempParams.getTempL())
             {
               heatingState = true;
               blowingState = true;
@@ -361,15 +368,15 @@ void setup()
   Serial.begin(115200);
   Serial.println();
 
-  pinMode(ledPin, OUTPUT); // initialize digital ledPin as an output.
   pinMode(HEAT_PIN, OUTPUT);
   pinMode(COOL_PIN, OUTPUT);
   delay(10);
-  digitalWrite(ledPin, LOW); // initialize pin as off (active LOW)
   digitalWrite(HEAT_PIN, LOW);
   digitalWrite(COOL_PIN, LOW);
 
   setupSensorsOnOneWire();
+  TempParameters tempParams;
+  struct TaskParameters parametersForTasks = { tempParams };
 
   #ifdef PRINT_ADDRESS_DS18B20
     DeviceAddress tempDeviceAddress;
@@ -425,8 +432,8 @@ void setup()
   xReadTempSemaphore = xSemaphoreCreateBinary();
   xSemaphoreGive(xReadTempSemaphore);
 
-  xTaskCreate(vCheckNewMessagesTask, "checkMsg", 0x2000, NULL, 2, NULL);
-  xTaskCreate(vTempControl, "tempControl", 0x2000, NULL, 2, NULL);
+  xTaskCreate(vCheckNewMessagesTask, "checkMsg", 0x2000, (void*) &parametersForTasks, 2, NULL);
+  xTaskCreate(vTempControl, "tempControl", 0x2000, (void*) &parametersForTasks, 2, NULL);
 }
 
 void loop()
