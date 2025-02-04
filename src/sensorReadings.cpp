@@ -1,79 +1,59 @@
 #include "sensorReadings.h"
 
-// Setup a oneWire instance to communicate with any OneWire devices
-OneWire oneWire(ONE_WIRE_BUS);
-
-// Pass our oneWire reference to Dallas Temperature sensor 
-DallasTemperature sensors(&oneWire);
-
-/* Init one wire for ds18b20 */
-void setupSensorsOnOneWire()
+FridgeTemps::FridgeTemps()
 {
-  // Start up the DS18B20 library
+  // Setup a oneWire instance to communicate with any OneWire devices
+  OneWire oneWire(ONE_WIRE_BUS);
+  // Pass our oneWire reference to Dallas Temperature sensor 
+  DallasTemperature sensors(&oneWire);
   sensors.begin();
 }
 
-/* Read a sensor by index. float format */
-float readDSTempC(uint8_t sensorIndex)
+void FridgeTemps::updateTemp()
 {
-  float tempC;
-  sensors.requestTemperatures(); 
-  tempC = sensors.getTempCByIndex(sensorIndex);
-  return tempC;  
+  sensors.requestTemperaturesByAddress(chamberAdd);
+  chamberTemp = sensors.getTempC(chamberAdd);
+  sensors.requestTemperaturesByAddress(liquidAdd); 
+  liquidTemp = sensors.getTempC(liquidAdd);
 }
 
-/* Read a sensor by address. float format */
-float readDSTempC(uint8_t* add)
+void FridgeTemps::setChamberAdd(uint8_t* pAdd)
 {
-  float tempC;
-  sensors.requestTemperaturesByAddress(add); 
-  tempC = sensors.getTempC(add);
-  return tempC; 
-}
-
-/* Call sensors.requestTemperatures() to issue a global temperature 
- * and Requests to all devices on the bus
- */
-String readDSTempStringC(uint8_t sensorIndex)
-{
-  float tempC;
-  String tempCString;
-
-  tempC = readDSTempC(sensorIndex);
-  if(tempC == -127.00) {
-    Serial.println("Failed to read from DS18B20 sensor");
-    tempCString = "--";
-  } else {
-    Serial.print("Temperature Celsius: ");
-    Serial.println(tempC); 
-    tempCString = String(tempC);
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    chamberAdd[i] = pAdd[i];
   }
-  return tempCString;
 }
 
-String readDSTempStringCByAdd(uint8_t* sensorAdd)
+void FridgeTemps::setLiquidAdd(uint8_t* pAdd)
 {
-  float tempC;
-  String tempCString;
-
-  tempC = readDSTempC(sensorAdd);
-  if(tempC == -127.00) {
-    Serial.println("Failed to read from DS18B20 sensor");
-    tempCString = "--";
-  } else {
-    Serial.print("Temperature Celsius: ");
-    Serial.println(tempC); 
-    tempCString = String(tempC);
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    liquidAdd[i] = pAdd[i];
   }
-  return tempCString;
 }
 
-int getSensorCount()
+float FridgeTemps::getChamberTemp()
+{
+  return chamberTemp; 
+}
+
+float FridgeTemps::getLiquidTemp()
+{
+  return liquidTemp; 
+}
+
+float FridgeTemps::getRefTemp()
+{
+  return chamberTemp;
+}
+
+int FridgeTemps::getSensorCount()
 {
   return sensors.getDeviceCount();
 }
 
-bool getAddress(DeviceAddress addr, int i)
+bool FridgeTemps::getAddress(uint8_t* addr, int i)
 {
   return sensors.getAddress(addr, i);
 }

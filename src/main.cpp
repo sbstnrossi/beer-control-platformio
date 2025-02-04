@@ -40,9 +40,13 @@
 #define UNDEFINED (0)
 #define HEATING   (1)
 #define COOLING   (2)
+
 #define COOL_WAIT (120000)
 #define FAN_WAIT  (300000)
-#define READ_WAIT (250)
+
+#define READ_PERIOD    (250)
+#define CONTROL_PERIOD (500)
+#define BOT_PERIOD    (1000)
 
 const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 
@@ -52,12 +56,11 @@ UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 struct TaskParameters 
 {
   TempParameters tempParams;
+  FridgeTemps    tempReadings;
 };
-float refTemp, chamberTemp, liquidTemp;
+
 UBaseType_t selectedMode = MODE_AUTO;
 UBaseType_t currentMode  = UNDEFINED;
-uint8_t chamberAdd[] = DS18B20_CHAMBER;
-uint8_t liquidAdd[]  = DS18B20_LIQUID;
 
 bool coolingState = false;
 bool heatingState = false;
@@ -68,7 +71,8 @@ bool canStopFan   = false;
 void handleNewMessages(int numNewMessages, void* params)
 {
   TaskParameters pParams = *(struct TaskParameters*)params;
-  TempParameters tempParams = pParams.tempParams;
+  TempParameters tempParams   = pParams.tempParams;
+  FridgeTemps    tempReadings = pParams.tempReadings;
   Serial.print("handleNewMessages ");
   Serial.println(numNewMessages);
 
@@ -128,8 +132,8 @@ void handleNewMessages(int numNewMessages, void* params)
                     "Ventilador: " + sFan + "\n" +
                     "Enfriador: " + sCooler + "\n" +
                     "Calentador: " + sHeater + "\n" +
-                    "Temperatura en la camara: " + String(chamberTemp) + "°C\n" +
-                    "Temperatura en el liquido: " +  String(liquidTemp)+ "°C\n" +
+                    "Temperatura en la camara: " + String(tempReadings.getChamberTemp()) + "°C\n" +
+                    "Temperatura en el liquido: " +  String(tempReadings.getLiquidTemp())+ "°C\n" +
                     "Temperatura superior de histéresis: " + String(tempParams.getTempH()) + "°C\n" +
                     "Temperatura inferior de histéresis: " + String(tempParams.getTempL()) + "°C\n" +
                     "Temperatura superior de cambio de modo: " + String(tempParams.getTempHH()) + "°C\n" +
@@ -139,20 +143,20 @@ void handleNewMessages(int numNewMessages, void* params)
 
     if (text == "/getTemp")
     {
-      String tempString = "Temperatura en la camara: " + String(chamberTemp) + "°C\n" +
-                          "Temperatura en el liquido: " + String(liquidTemp) + "°C\n";
+      String tempString = "Temperatura en la camara: " + String(tempReadings.getChamberTemp()) + "°C\n" +
+                          "Temperatura en el liquido: " + String(tempReadings.getLiquidTemp()) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
     if (text == "/getChamberTemp")
     {
-      String tempString = "Temperatura en la camara: " + String(chamberTemp) + "°C\n";
+      String tempString = "Temperatura en la camara: " + String(tempReadings.getChamberTemp()) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
     if (text == "/getLiquidTemp")
     {
-      String tempString = "Temperatura en el liquido: " + String(liquidTemp) + "°C\n";
+      String tempString = "Temperatura en el liquido: " + String(tempReadings.getLiquidTemp()) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
@@ -180,28 +184,19 @@ void handleNewMessages(int numNewMessages, void* params)
 
 /** tareas ********************************************/
 /* check for new messages */
-/* TODO make this task to execute with freeRTOS timer*/
 void vCheckNewMessagesTask(void *px)
 {
-  /* last time messages' scan has been done */
-  static unsigned long bot_now, bot_lasttime = millis();
-
   while(1)
   {
-    bot_now = millis();
-    if ((bot_now - bot_lasttime > BOT_MTBS) || (bot_now < bot_lasttime))
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+
+    while (numNewMessages)
     {
-      int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-
-      while (numNewMessages)
-      {
-        Serial.println("got response");
-        handleNewMessages(numNewMessages, px);
-        numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-      }
-
-      bot_lasttime = millis();
+      Serial.println("got response");
+      handleNewMessages(numNewMessages, px);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
     }
+    vTaskDelay(BOT_PERIOD);
   }
 
   /* Must not exit, but if you leave the while(1) you can delete the task */
@@ -211,13 +206,12 @@ void vCheckNewMessagesTask(void *px)
 /* sensor readings in a separate task */
 void vReadTempTask(void *px)
 {
-  static unsigned long currentTime, lastTime = millis();
+  TaskParameters pParams = *(struct TaskParameters*)px;
+  FridgeTemps    tempReadings = pParams.tempReadings;
   while(1)
   {
-      chamberTemp = readDSTempC(chamberAdd);
-      liquidTemp  = readDSTempC( liquidAdd);
-      refTemp     = chamberTemp;
-      vTaskDelay(READ_WAIT);
+      tempReadings.updateTemp();
+      vTaskDelay(READ_PERIOD);
   }
 
   /* Must not exit, but if you leave the while(1) you can delete the task */
@@ -232,7 +226,8 @@ void vTempControl(void* px)
   TickType_t xTimeOff = xTaskGetTickCount();
   TickType_t xTimeCur;
   TaskParameters pParams = *(struct TaskParameters*)px;
-  TempParameters tempParams = pParams.tempParams;
+  TempParameters tempParams   = pParams.tempParams;
+  FridgeTemps    tempReadings = pParams.tempReadings;
   while(1){
     xTimeCur = xTaskGetTickCount();
     if (xTimeCur < xTimeOff) xTimeOff = xTimeCur;
@@ -248,14 +243,14 @@ void vTempControl(void* px)
           switch (currentMode)
           {
             case UNDEFINED :
-              if (refTemp > tempParams.getTempHH()) currentMode = COOLING;
-              else if (refTemp < tempParams.getTempLL()) currentMode = HEATING;
+              if (tempReadings.getRefTemp() > tempParams.getTempHH()) currentMode = COOLING;
+              else if (tempReadings.getRefTemp() < tempParams.getTempLL()) currentMode = HEATING;
               break;
             case HEATING :
-              if (refTemp > tempParams.getTempHH()) currentMode = COOLING;
+              if (tempReadings.getRefTemp() > tempParams.getTempHH()) currentMode = COOLING;
               break;
             case COOLING :
-              if (refTemp < tempParams.getTempLL()) currentMode = HEATING;
+              if (tempReadings.getRefTemp() < tempParams.getTempLL()) currentMode = HEATING;
               break;
             default:
               currentMode = UNDEFINED;
@@ -288,14 +283,14 @@ void vTempControl(void* px)
             xTimeOff = xTaskGetTickCount();
             heatingState = false;
           }
-          if (coolingState && (refTemp < tempParams.getTempL())) 
+          if (coolingState && (tempReadings.getRefTemp() < tempParams.getTempL())) 
           {
             xTimeOff = xTaskGetTickCount();
             coolingState = false;
           } 
           else if (!(coolingState))
           {
-            if (canRestart && (refTemp > tempParams.getTempH()))
+            if (canRestart && (tempReadings.getRefTemp() > tempParams.getTempH()))
             {
               coolingState = true;
               blowingState = true;
@@ -312,14 +307,14 @@ void vTempControl(void* px)
             xTimeOff = xTaskGetTickCount();
             coolingState = false;
           }
-          if (heatingState && (refTemp > tempParams.getTempH()))
+          if (heatingState && (tempReadings.getRefTemp() > tempParams.getTempH()))
           {
             xTimeOff = xTaskGetTickCount();
             heatingState = false;
           } 
           else if (!(heatingState))
           {
-            if (refTemp < tempParams.getTempL())
+            if (tempReadings.getRefTemp() < tempParams.getTempL())
             {
               heatingState = true;
               blowingState = true;
@@ -349,7 +344,7 @@ void vTempControl(void* px)
       heatingState = false;
       blowingState = false;
     }
-    vTaskDelay(500);
+    vTaskDelay(CONTROL_PERIOD);
   }
   /* Must not exit, but if you leave the while(1) you can delete the task */
   vTaskDelete(NULL);
@@ -368,14 +363,14 @@ void setup()
   digitalWrite(HEAT_PIN, LOW);
   digitalWrite(COOL_PIN, LOW);
 
-  setupSensorsOnOneWire();
   TempParameters tempParams;
-  struct TaskParameters parametersForTasks = { tempParams };
+  FridgeTemps    tempReadings;
+  struct TaskParameters parametersForTasks = { tempParams, tempReadings };
 
   #ifdef PRINT_ADDRESS_DS18B20
     DeviceAddress tempDeviceAddress;
 
-    int numberOfDevices = getSensorCount();
+    int numberOfDevices = tempReadings.getSensorCount();
     
     // locate devices on the bus
     Serial.print("Locating devices...");
@@ -386,7 +381,7 @@ void setup()
     // Loop through each device, print out address
     for(int i=0;i<numberOfDevices; i++) {
       // Search the wire for address
-      if(getAddress(tempDeviceAddress, i)) {
+      if(tempReadings.getAddress(tempDeviceAddress, i)) {
         Serial.print("Found device ");
         Serial.print(i, DEC);
         Serial.print(" with address: ");
