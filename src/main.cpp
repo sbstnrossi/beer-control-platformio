@@ -49,7 +49,7 @@ WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
 float refTemp, chamberTemp, liquidTemp;
-float tempH = 22.0, tempHH = 23.0, tempL = 18.0, tempLL = 17.0;
+float tempH = 22.0, tempHH = 23.0, tempL = 17.0, tempLL = 16.0;
 UBaseType_t selectedMode = MODE_COOL;
 UBaseType_t currentMode  = UNDEFINED;
 uint8_t chamberAdd[] = DS18B20_CHAMBER;
@@ -154,18 +154,68 @@ void handleNewMessages(int numNewMessages)
     if (text == "/setModeAuto") selectedMode = MODE_AUTO;
     if (text == "/setModeCool") selectedMode = MODE_COOL;
     if (text == "/setModeHeat") selectedMode = MODE_HEAT;
+    if (text == "/setTempHp")   
+    {
+      tempH = tempH + 1.0;
+      String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempHHp")   
+    {
+      tempHH = tempHH + 1.0;
+      String tempString = "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempLp")   
+    {
+      tempL = tempL + 1.0;
+      String tempString = "Temperatura inferior de histéresis: " + String(tempL) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempLLp")   
+    {
+      tempLL = tempLL + 1.0;
+      String tempString = "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempHm")   
+    {
+      tempH = tempH - 1.0;
+      String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempHHm")   
+    {
+      tempHH = tempHH - 1.0;
+      String tempString = "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempLm")   
+    {
+      tempL = tempL - 1.0;
+      String tempString = "Temperatura inferior de histéresis: " + String(tempL) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
+    if (text == "/setTempLLm")   
+    {
+      tempLL = tempLL - 1.0;
+      String tempString = "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
+    }
 
     if (text == "/start")
     {
       String welcome = "Hola, " + from_name + ".\n";
       welcome += "Por acá se interactúa con el control de procesos de cerveza casera.\n\n";
+      welcome += "/getTemp : lista todas las temperaturas leídas\n";
+      welcome += "/getChamberTemp : Temperatura en la cámara\n";
+      welcome += "/getLiquidTemp : Temperatura en el líquido\n";
       welcome += "/setModeAuto : para que enfríe o caliente según haga falta\n";
       welcome += "/setModeCool : modo solo enfriamiento\n";
       welcome += "/setModeHeat : modo solo calentamiento\n";
       welcome += "/setModeOff : modo apagado\n";
-      welcome += "/getTemp : lista todas las temperaturas leídas\n";
-      welcome += "/getChamberTemp : Temperatura en la cámara\n";
-      welcome += "/getLiquidTemp : Temperatura en el líquido\n";
+      welcome += "/setTempHp : incrementa temperaturra de referencia\n";
+      welcome += "/setTempLm : decrementa temperaturra de referencia\n";
       welcome += "/status : Estado general del sistema.\n";
       bot.sendMessage(chat_id, welcome, "Markdown");
     }
