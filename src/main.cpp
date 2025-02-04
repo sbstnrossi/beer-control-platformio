@@ -29,9 +29,9 @@
 
 #define PRINT_ADDRESS_DS18B20
 
-#define HEAT_PIN (21)
-#define COOL_PIN (22)
-#define FAN_PIN  (23)
+#define HEAT_PIN (25)
+#define COOL_PIN (26)
+#define FAN_PIN  (27)
 
 #define MODE_OFF  (0)
 #define MODE_AUTO (1)
@@ -42,6 +42,7 @@
 #define COOLING   (2)
 #define COOL_WAIT (120000)
 #define FAN_WAIT  (300000)
+#define READ_WAIT (250)
 
 const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 
@@ -52,12 +53,11 @@ struct TaskParameters
 {
   TempParameters tempParams;
 };
-float refTemp;
+float refTemp, chamberTemp, liquidTemp;
 UBaseType_t selectedMode = MODE_AUTO;
 UBaseType_t currentMode  = UNDEFINED;
 uint8_t chamberAdd[] = DS18B20_CHAMBER;
 uint8_t liquidAdd[]  = DS18B20_LIQUID;
-SemaphoreHandle_t xReadTempSemaphore;
 
 bool coolingState = false;
 bool heatingState = false;
@@ -123,57 +123,37 @@ void handleNewMessages(int numNewMessages, void* params)
       sFan    = blowingState ? "Encendido" : "Apagado";
       sCooler = coolingState ? "Encendido" : "Apagado";
       sHeater = heatingState ? "Encendido" : "Apagado";
-      if (xSemaphoreTake(xReadTempSemaphore, portMAX_DELAY) == pdTRUE)
-      {
-        statusString = "Modo de operación seleccionado: " + sMode + "\n" +
-                      "Modo de operación en funcionamiento: " + sOperating + "\n" +
-                      "Ventilador: " + sFan + "\n" +
-                      "Enfriador: " + sCooler + "\n" +
-                      "Calentador: " + sHeater + "\n" +
-                      "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n" +
-                      "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n" +
-                      "Temperatura superior de histéresis: " + String(tempParams.getTempH()) + "°C\n" +
-                      "Temperatura inferior de histéresis: " + String(tempParams.getTempL()) + "°C\n" +
-                      "Temperatura superior de cambio de modo: " + String(tempParams.getTempHH()) + "°C\n" +
-                      "Temperatura inferior de cambio de modo: " + String(tempParams.getTempLL()) + "°C\n";
-        xSemaphoreGive(xReadTempSemaphore);
-      }
-      else
-      {
-        statusString = "No se obtuvo el semaforo";
-      }
+      statusString = "Modo de operación seleccionado: " + sMode + "\n" +
+                    "Modo de operación en funcionamiento: " + sOperating + "\n" +
+                    "Ventilador: " + sFan + "\n" +
+                    "Enfriador: " + sCooler + "\n" +
+                    "Calentador: " + sHeater + "\n" +
+                    "Temperatura en la camara: " + String(chamberTemp) + "°C\n" +
+                    "Temperatura en el liquido: " +  String(liquidTemp)+ "°C\n" +
+                    "Temperatura superior de histéresis: " + String(tempParams.getTempH()) + "°C\n" +
+                    "Temperatura inferior de histéresis: " + String(tempParams.getTempL()) + "°C\n" +
+                    "Temperatura superior de cambio de modo: " + String(tempParams.getTempHH()) + "°C\n" +
+                    "Temperatura inferior de cambio de modo: " + String(tempParams.getTempLL()) + "°C\n";
       bot.sendMessage(chat_id, statusString, "Markdown");
     }
 
     if (text == "/getTemp")
     {
-      if (xSemaphoreTake(xReadTempSemaphore, portMAX_DELAY) == pdTRUE)
-      {
-        String tempString = "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n" +
-                            "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n";
-        xSemaphoreGive(xReadTempSemaphore);
-        bot.sendMessage(chat_id, tempString, "Markdown");
-      }
+      String tempString = "Temperatura en la camara: " + String(chamberTemp) + "°C\n" +
+                          "Temperatura en el liquido: " + String(liquidTemp) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
     if (text == "/getChamberTemp")
     {
-      if (xSemaphoreTake(xReadTempSemaphore, portMAX_DELAY) == pdTRUE)
-      {
-        String tempString = "Temperatura en la camara: " + readDSTempStringCByAdd(chamberAdd) + "°C\n";
-        xSemaphoreGive(xReadTempSemaphore);
-        bot.sendMessage(chat_id, tempString, "Markdown");
-      }
+      String tempString = "Temperatura en la camara: " + String(chamberTemp) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
     if (text == "/getLiquidTemp")
     {
-      if (xSemaphoreTake(xReadTempSemaphore, portMAX_DELAY) == pdTRUE)
-      {
-        String tempString = "Temperatura en el liquido: " + readDSTempStringCByAdd(liquidAdd) + "°C\n";
-        xSemaphoreGive(xReadTempSemaphore);
-        bot.sendMessage(chat_id, tempString, "Markdown");
-      }
+      String tempString = "Temperatura en el liquido: " + String(liquidTemp) + "°C\n";
+      bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
     if (text == "/setModeOff")  selectedMode = MODE_OFF;
@@ -204,11 +184,12 @@ void handleNewMessages(int numNewMessages, void* params)
 void vCheckNewMessagesTask(void *px)
 {
   /* last time messages' scan has been done */
-  static unsigned long bot_lasttime = millis();
+  static unsigned long bot_now, bot_lasttime = millis();
 
   while(1)
   {
-    if (millis() - bot_lasttime > BOT_MTBS)
+    bot_now = millis();
+    if ((bot_now - bot_lasttime > BOT_MTBS) || (bot_now < bot_lasttime))
     {
       int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
 
@@ -227,6 +208,21 @@ void vCheckNewMessagesTask(void *px)
   vTaskDelete(NULL);
 }
 
+/* sensor readings in a separate task */
+void vReadTempTask(void *px)
+{
+  static unsigned long currentTime, lastTime = millis();
+  while(1)
+  {
+      chamberTemp = readDSTempC(chamberAdd);
+      liquidTemp  = readDSTempC( liquidAdd);
+      refTemp     = chamberTemp;
+      vTaskDelay(READ_WAIT);
+  }
+
+  /* Must not exit, but if you leave the while(1) you can delete the task */
+  vTaskDelete(NULL);
+}
     
 /* check for temperature bounds - ¿log? */
 
@@ -242,11 +238,7 @@ void vTempControl(void* px)
     if (xTimeCur < xTimeOff) xTimeOff = xTimeCur;
     canRestart = xTimeCur - xTimeOff > COOL_WAIT ? true : false;
     canStopFan = xTimeCur - xTimeOff > FAN_WAIT  ? true : false;
-    if (xSemaphoreTake(xReadTempSemaphore, 15) == pdTRUE)
-    {
-      refTemp = readDSTempC(chamberAdd);
-      xSemaphoreGive(xReadTempSemaphore);
-    }
+    
     if (selectedMode != MODE_OFF)
     {
       /* mode changes */
@@ -298,7 +290,7 @@ void vTempControl(void* px)
           }
           if (coolingState && (refTemp < tempParams.getTempL())) 
           {
-            
+            xTimeOff = xTaskGetTickCount();
             coolingState = false;
           } 
           else if (!(coolingState))
@@ -368,9 +360,11 @@ void setup()
   Serial.begin(115200);
   Serial.println();
 
+  pinMode(FAN_PIN, OUTPUT); 
   pinMode(HEAT_PIN, OUTPUT);
   pinMode(COOL_PIN, OUTPUT);
   delay(10);
+  digitalWrite(FAN_PIN, LOW); 
   digitalWrite(HEAT_PIN, LOW);
   digitalWrite(COOL_PIN, LOW);
 
@@ -429,11 +423,10 @@ void setup()
   
   Serial.println(now);
 
-  xReadTempSemaphore = xSemaphoreCreateBinary();
-  xSemaphoreGive(xReadTempSemaphore);
-
-  xTaskCreate(vCheckNewMessagesTask, "checkMsg", 0x2000, (void*) &parametersForTasks, 2, NULL);
-  xTaskCreate(vTempControl, "tempControl", 0x2000, (void*) &parametersForTasks, 2, NULL);
+  xTaskCreate(vReadTempTask,         "readTemp",    0x2000, NULL, 2, NULL);
+  vTaskDelay(1000);
+  xTaskCreate(vCheckNewMessagesTask, "checkMsg",    0x2000, (void*) &parametersForTasks, 2, NULL);
+  xTaskCreate(vTempControl,          "tempControl", 0x2000, (void*) &parametersForTasks, 2, NULL);
 }
 
 void loop()
