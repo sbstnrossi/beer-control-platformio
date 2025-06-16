@@ -25,6 +25,7 @@
 #include <UniversalTelegramBot.h>
 #include "sensorReadings.h"
 #include "tokens.h"
+#include <EEPROM.h>
 
 #define PRINT_ADDRESS_DS18B20
 
@@ -42,6 +43,14 @@
 #define COOL_WAIT (120000)
 #define FAN_WAIT  (300000)
 #define READ_WAIT (250)
+#define WRITTEN_ADD (0)
+#define TH_ADD      (1)
+#define THH_ADD     (2)
+#define TL_ADD      (3)
+#define TLL_ADD     (4)
+#define SMODE_ADD   (5)
+#define CMODE_ADD   (6)
+#define EEPROM_S    (7)
 
 const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 
@@ -49,7 +58,7 @@ WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
 float refTemp, chamberTemp, liquidTemp;
-float tempH = 22.0, tempHH = 23.0, tempL = 17.0, tempLL = 16.0;
+float tempH = 23.0, tempHH = 24.0, tempL = 17.0, tempLL = 16.0;
 UBaseType_t selectedMode = MODE_COOL;
 UBaseType_t currentMode  = UNDEFINED;
 uint8_t chamberAdd[] = DS18B20_CHAMBER;
@@ -63,6 +72,8 @@ bool canStopFan   = false;
 
 void handleNewMessages(int numNewMessages)
 {
+  static bool waitingFloat = false;
+  static String last;
   Serial.print("handleNewMessages ");
   Serial.println(numNewMessages);
 
@@ -70,6 +81,9 @@ void handleNewMessages(int numNewMessages)
   {
     String chat_id = bot.messages[i].chat_id;
     String text = bot.messages[i].text;
+    Serial.println(text);
+    Serial.println(last);
+    Serial.println(waitingFloat);
 
     String from_name = bot.messages[i].from_name;
     if (from_name == "")
@@ -154,7 +168,21 @@ void handleNewMessages(int numNewMessages)
     if (text == "/setModeAuto") selectedMode = MODE_AUTO;
     if (text == "/setModeCool") selectedMode = MODE_COOL;
     if (text == "/setModeHeat") selectedMode = MODE_HEAT;
-    if (text == "/setTempHp")   
+
+    if (waitingFloat) {
+      if (last == "/setTempH") {
+        tempH = text.toFloat();
+        String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
+        bot.sendMessage(chat_id, tempString, "Markdown");
+      }
+      waitingFloat = false;
+    }
+    if (text == "/setTempH") {
+      last = "/setTempH";
+      waitingFloat = true;
+      Serial.println(last);
+    }
+    if (text == "/setTempHp")
     {
       tempH = tempH + 1.0;
       String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
@@ -462,6 +490,10 @@ void setup()
   time_t now = time(nullptr);
   
   Serial.println(now);
+
+  EEPROM.begin(EEPROM_S);
+  tempH = (float) EEPROM.read(TH_ADD);
+  Serial.println(tempH);
 
   xTaskCreate(vReadTempTask,         "readTemp",    0x2000, NULL, 2, NULL);
   vTaskDelay(1000);
