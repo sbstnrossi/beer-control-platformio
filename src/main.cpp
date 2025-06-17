@@ -25,7 +25,7 @@
 #include <UniversalTelegramBot.h>
 #include "sensorReadings.h"
 #include "tokens.h"
-#include <EEPROM.h>
+#include <Preferences.h>
 
 #define PRINT_ADDRESS_DS18B20
 
@@ -57,9 +57,11 @@ const unsigned long BOT_MTBS = 1000; // mean time between scan messages
 WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
+Preferences pref;
+
 float refTemp, chamberTemp, liquidTemp;
-float tempH = 23.0, tempHH = 24.0, tempL = 17.0, tempLL = 16.0;
-UBaseType_t selectedMode = MODE_COOL;
+float tempH, tempHH, tempL, tempLL;
+UBaseType_t selectedMode;
 UBaseType_t currentMode  = UNDEFINED;
 uint8_t chamberAdd[] = DS18B20_CHAMBER;
 uint8_t liquidAdd[]  = DS18B20_LIQUID;
@@ -164,73 +166,111 @@ void handleNewMessages(int numNewMessages)
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
 
-    if (text == "/setModeOff")  selectedMode = MODE_OFF;
-    if (text == "/setModeAuto") selectedMode = MODE_AUTO;
-    if (text == "/setModeCool") selectedMode = MODE_COOL;
-    if (text == "/setModeHeat") selectedMode = MODE_HEAT;
-
+    if (text == "/setModeOff") {
+      selectedMode = MODE_OFF;
+      pref.putULong("selMode", selectedMode);
+    }
+    if (text == "/setModeAuto") {
+      selectedMode = MODE_AUTO;
+      pref.putULong("selMode", selectedMode);
+    }
+    if (text == "/setModeCool") {
+      selectedMode = MODE_COOL;
+      pref.putULong("selMode", selectedMode);
+    }
+    if (text == "/setModeHeat") {
+      selectedMode = MODE_HEAT;
+      pref.putULong("selMode", selectedMode);
+    }
     if (waitingFloat) {
       if (last == "/setTempH") {
         tempH = text.toFloat();
+        pref.putFloat("tempH", tempH);
         String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
+        bot.sendMessage(chat_id, tempString, "Markdown");
+      }
+      if (last == "/setTempHH") {
+        tempHH = text.toFloat();
+        pref.putFloat("tempHH", tempHH);
+        String tempString = "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n";
+        bot.sendMessage(chat_id, tempString, "Markdown");
+      }
+      if (last == "/setTempL") {
+        tempL = text.toFloat();
+        pref.putFloat("tempL", tempL);
+        String tempString = "Temperatura inferior de histéresis: " + String(tempL) + "°C\n";
+        bot.sendMessage(chat_id, tempString, "Markdown");
+      }
+      if (last == "/setTempLL") {
+        tempLL = text.toFloat();
+        pref.putFloat("tempLL", tempLL);
+        String tempString = "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
         bot.sendMessage(chat_id, tempString, "Markdown");
       }
       waitingFloat = false;
     }
-    if (text == "/setTempH") {
-      last = "/setTempH";
+    if (text == "/setTempH" || text == "/setTempHH" || text == "/setTempL" || text == "/setTempLL") {
+      last = text;
       waitingFloat = true;
-      Serial.println(last);
     }
+    
     if (text == "/setTempHp")
     {
       tempH = tempH + 1.0;
+      pref.putFloat("tempH", tempH);
       String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempHHp")   
     {
       tempHH = tempHH + 1.0;
+      pref.putFloat("tempHH", tempHH);
       String tempString = "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempLp")   
     {
       tempL = tempL + 1.0;
+      pref.putFloat("tempL", tempL);
       String tempString = "Temperatura inferior de histéresis: " + String(tempL) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempLLp")   
     {
       tempLL = tempLL + 1.0;
+      pref.putFloat("tempLL", tempLL);
       String tempString = "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempHm")   
     {
       tempH = tempH - 1.0;
+      pref.putFloat("tempH", tempH);
       String tempString = "Temperatura superior de histéresis: " + String(tempH) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempHHm")   
     {
       tempHH = tempHH - 1.0;
+      pref.putFloat("tempHH", tempHH);
       String tempString = "Temperatura superior de cambio de modo: " + String(tempHH) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempLm")   
     {
       tempL = tempL - 1.0;
+      pref.putFloat("tempL", tempL);
       String tempString = "Temperatura inferior de histéresis: " + String(tempL) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
     if (text == "/setTempLLm")   
     {
       tempLL = tempLL - 1.0;
+      pref.putFloat("tempLL", tempLL);
       String tempString = "Temperatura inferior de cambio de modo: " + String(tempLL) + "°C\n";
       bot.sendMessage(chat_id, tempString, "Markdown");
     }
-
+    
     if (text == "/start")
     {
       String welcome = "Hola, " + from_name + ".\n";
@@ -491,9 +531,12 @@ void setup()
   
   Serial.println(now);
 
-  EEPROM.begin(EEPROM_S);
-  tempH = (float) EEPROM.read(TH_ADD);
-  Serial.println(tempH);
+  pref.begin("temp", false);
+  tempH  = pref.getFloat("tempH",  22.0);
+  tempHH = pref.getFloat("tempHH", 23.0);
+  tempL  = pref.getFloat("tempL",  18.0);
+  tempLL = pref.getFloat("tempLL", 17.0);
+  selectedMode = pref.getULong("selMode", COOLING);
 
   xTaskCreate(vReadTempTask,         "readTemp",    0x2000, NULL, 2, NULL);
   vTaskDelay(1000);
